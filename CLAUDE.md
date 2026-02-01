@@ -9,6 +9,48 @@
 - **Styling**: Tailwind CSS
 - **Backend**: Supabase (Auth, Database, Storage)
 - **Deployment**: Vercel
+- **Design**: Figma + MCP 연동
+
+---
+
+## 개발 워크플로우
+
+### UI 개발 프로세스
+
+```
+[Figma 디자인] → [MCP 연결] → [Claude 구현] → [코드 리뷰]
+```
+
+1. **사용자**: Figma에서 UI 디자인 완료
+2. **사용자**: Figma MCP 연결
+3. **Claude**: 디자인 기반으로 프론트엔드 코드 구현
+4. **사용자**: 코드 리뷰 및 피드백
+
+### Figma MCP 연동 규칙
+
+- Figma 디자인이 **없으면 UI 구현하지 않음**
+- 디자인과 다른 임의 구현 금지
+- 불명확한 부분은 구현 전 질문
+
+### Figma → 코드 변환 규칙
+
+| Figma | 코드 |
+|-------|------|
+| 컴포넌트 이름 | 파일명 (PascalCase) |
+| Auto Layout | Flexbox (`flex`, `gap`) |
+| 색상 변수 | Tailwind 색상 또는 CSS 변수 |
+| 폰트 스타일 | Tailwind 타이포그래피 |
+| 간격 (8px 단위) | Tailwind spacing (`p-2`, `m-4`) |
+
+### 예시
+
+```
+Figma 레이어: "Button/Primary"
+→ src/components/ui/Button.tsx (variant="primary")
+
+Figma 레이어: "Card/InvitationPreview"
+→ src/components/features/InvitationPreview.tsx
+```
 
 ---
 
@@ -150,5 +192,6 @@ chore: 빌드, 설정 변경
 | 2025-02-01 | any 타입 금지 | 타입 안정성 확보 |
 | 2025-02-01 | interface 대신 type 사용 | 일관성, 확장성 |
 | 2025-02-01 | snake_case DB 네이밍 | Supabase/PostgreSQL 컨벤션 |
+| 2025-02-01 | Figma MCP 워크플로우 | 디자인 기반 개발, 일관성 확보 |
 
 <!-- 새 규칙 추가 시 위 테이블에 기록해주세요 -->
