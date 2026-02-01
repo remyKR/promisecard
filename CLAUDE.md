@@ -138,3 +138,17 @@ chore: 빌드, 설정 변경
 - [Next.js Docs](https://nextjs.org/docs)
 - [Tailwind CSS Docs](https://tailwindcss.com/docs)
 - [Supabase Docs](https://supabase.com/docs)
+
+---
+
+## 변경 이력
+
+| 날짜 | 규칙 | 이유 |
+|------|------|------|
+| 2025-02-01 | 프로젝트 초기 설정 | Next.js + TypeScript + Tailwind |
+| 2025-02-01 | enum 금지 | 번들 크기 증가, Tree-shaking 불가 |
+| 2025-02-01 | any 타입 금지 | 타입 안정성 확보 |
+| 2025-02-01 | interface 대신 type 사용 | 일관성, 확장성 |
+| 2025-02-01 | snake_case DB 네이밍 | Supabase/PostgreSQL 컨벤션 |
+
+<!-- 새 규칙 추가 시 위 테이블에 기록해주세요 -->
