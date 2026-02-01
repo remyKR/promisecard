@@ -149,6 +149,7 @@ export const supabase = createClient(
 - ❌ 하드코딩된 API URL 금지
 - ❌ `!important` 사용 금지
 - ❌ 인라인 스타일 (`style={}`) 금지
+- ❌ **Figma 스크린샷으로 UI 구현 절대 금지** (MCP/API 연동 필수)
 
 ---
 
@@ -193,5 +194,6 @@ chore: 빌드, 설정 변경
 | 2025-02-01 | interface 대신 type 사용 | 일관성, 확장성 |
 | 2025-02-01 | snake_case DB 네이밍 | Supabase/PostgreSQL 컨벤션 |
 | 2025-02-01 | Figma MCP 워크플로우 | 디자인 기반 개발, 일관성 확보 |
+| 2025-02-02 | Figma 스크린샷 UI 구현 금지 | MCP/API 연동 필수, 품질 보장 |
 
 <!-- 새 규칙 추가 시 위 테이블에 기록해주세요 -->
