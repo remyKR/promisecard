@@ -1,11 +1,77 @@
 # PromiseCard Information Architecture (IA)
 
 > 작성일: 2025-02-01
-> 버전: v1.3
+> 버전: v1.4
 
 ---
 
-## 1. 사이트맵
+## 사이트맵 (Visual)
+
+```mermaid
+flowchart TB
+    subgraph PUBLIC["🌐 Public Pages"]
+        HOME["🏠 Home<br/>/"]
+        HOME --> CREATE["📝 Create Invitation<br/>/create"]
+        HOME --> SAMPLES["🎨 Design Samples<br/>/samples"]
+
+        REVIEWS["⭐ Reviews<br/>/reviews"]
+        REVIEWS --> PHOTO["📷 Photo Reviews<br/>/reviews/photo"]
+
+        FAQ["❓ FAQ<br/>/faq"]
+
+        SUPPORT["🎧 Support<br/>/support"]
+        SUPPORT --> NOTICE["📢 Notices<br/>/support/notice"]
+        SUPPORT --> TERMS["📄 Terms<br/>/support/terms"]
+
+        CARD["💌 View Invitation<br/>/card/[code]"]
+    end
+
+    subgraph AUTH["🔐 Auth Pages"]
+        LOGIN["🔑 Login<br/>/login"]
+        SIGNUP["✏️ Sign Up<br/>/signup"]
+        VERIFY["📱 Phone Verification<br/>/verify-phone"]
+        LOGIN --> VERIFY
+        SIGNUP --> VERIFY
+    end
+
+    subgraph PRIVATE["👤 Private Pages (로그인 필수)"]
+        REVIEWS --> WRITE["✍️ Write Review<br/>/reviews/write"]
+
+        SUPPORT --> INQUIRY["💬 Contact Us<br/>/support/inquiry"]
+        SUPPORT --> HISTORY["📋 My Inquiries<br/>/support/inquiry/history"]
+
+        MY["👤 My Page<br/>/my"]
+        MY --> MYCARDS["💌 My Invitations<br/>/my/cards"]
+        MY --> ACCOUNT["⚙️ Account Settings<br/>/my/account"]
+    end
+
+    VERIFY --> MY
+```
+
+---
+
+## 사용자 플로우 (User Flow)
+
+```mermaid
+flowchart LR
+    A["🏠 홈 방문"] --> B{"로그인?"}
+    B -->|No| C["🔑 로그인/회원가입"]
+    C --> D["📱 전화번호 인증"]
+    D --> E["✅ 인증 완료"]
+    B -->|Yes| E
+    E --> F["📝 청첩장 제작"]
+    F --> G["🎨 템플릿 선택"]
+    G --> H["✏️ 정보 입력"]
+    H --> I["👁️ 미리보기"]
+    I --> J{"저장?"}
+    J -->|임시저장| K["📂 My Invitations"]
+    J -->|저장완료| L["🔗 공유 링크 생성"]
+    L --> M["📤 SNS 공유"]
+```
+
+---
+
+## 1. 사이트맵 (Text)
 
 ```
 promisecard.vn
@@ -272,3 +338,4 @@ promisecard.vn
 | 2025-02-01 | v1.1 | 2 Depth 추가 (모바일 청첩장, 고객후기, 고객센터) |
 | 2025-02-01 | v1.2 | 마이페이지 2 Depth 추가 |
 | 2025-02-01 | v1.3 | 페이지 영문 네이밍 추가 |
+| 2025-02-01 | v1.4 | Mermaid 다이어그램 추가 (사이트맵, 유저플로우) |
