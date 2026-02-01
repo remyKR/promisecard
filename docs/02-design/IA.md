@@ -1,7 +1,7 @@
 # PromiseCard Information Architecture (IA)
 
 > 작성일: 2025-02-01
-> 버전: v1.2
+> 버전: v1.3
 
 ---
 
@@ -226,7 +226,33 @@ promisecard.vn
 
 ---
 
-## 5. 2 Depth 요약
+## 5. 페이지 네이밍 (영문)
+
+| 한글 | 영문 (Page Name) | URL | 파일명 |
+|------|-----------------|-----|--------|
+| 모바일 청첩장 (홈) | Home | `/` | `page.tsx` |
+| 청첩장 제작하기 | Create Invitation | `/create` | `create/page.tsx` |
+| 디자인 샘플 보기 | Design Samples | `/samples` | `samples/page.tsx` |
+| 고객후기 | Reviews | `/reviews` | `reviews/page.tsx` |
+| 포토 후기 | Photo Reviews | `/reviews/photo` | `reviews/photo/page.tsx` |
+| 후기 작성 | Write Review | `/reviews/write` | `reviews/write/page.tsx` |
+| FAQ | FAQ | `/faq` | `faq/page.tsx` |
+| 고객센터 | Support | `/support` | `support/page.tsx` |
+| 공지사항 | Notices | `/support/notice` | `support/notice/page.tsx` |
+| 1:1 문의 | Contact Us | `/support/inquiry` | `support/inquiry/page.tsx` |
+| 문의 내역 | My Inquiries | `/support/inquiry/history` | `support/inquiry/history/page.tsx` |
+| 이용약관 | Terms | `/support/terms` | `support/terms/page.tsx` |
+| 로그인 | Login | `/login` | `login/page.tsx` |
+| 회원가입 | Sign Up | `/signup` | `signup/page.tsx` |
+| 전화번호 인증 | Phone Verification | `/verify-phone` | `verify-phone/page.tsx` |
+| 마이페이지 | My Page | `/my` | `my/page.tsx` |
+| 내 청첩장 | My Invitations | `/my/cards` | `my/cards/page.tsx` |
+| 내 계정관리 | Account Settings | `/my/account` | `my/account/page.tsx` |
+| 청첩장 보기 | View Invitation | `/card/[code]` | `card/[code]/page.tsx` |
+
+---
+
+## 6. 2 Depth 요약
 
 | 1 Depth | 2 Depth |
 |---------|---------|
@@ -245,3 +271,4 @@ promisecard.vn
 | 2025-02-01 | v1.0 | 1 Depth IA 작성 |
 | 2025-02-01 | v1.1 | 2 Depth 추가 (모바일 청첩장, 고객후기, 고객센터) |
 | 2025-02-01 | v1.2 | 마이페이지 2 Depth 추가 |
+| 2025-02-01 | v1.3 | 페이지 영문 네이밍 추가 |
