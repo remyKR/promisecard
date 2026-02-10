@@ -1,5 +1,5 @@
 /* =========================================================
-   DATABASE
+   PART 0) DATABASE
    ========================================================= */
 
 CREATE DATABASE IF NOT EXISTS `their_mood`
@@ -14,18 +14,33 @@ USE `their_mood`;
 - 이렇게 하면 InnoDB 클러스터드 인덱스(Primary Key) 삽입이 시간순에 가까워져 성능에 유리합니다.
 */
 
+/*
+[설계 핵심 원칙]
+1) 1:1 "설정/렌더링 전용" 데이터는 JOIN 비용을 줄이기 위해 `card.config_json`으로 통합합니다.
+   - 예: main_cover, opening_animation, greeting, venue, gallery_setting, video, mid_photo, background_music,
+         contact_setting, donation_setting, guestbook_setting, rsvp_setting, interview_setting,
+         wreath_setting, snap_setting, section_order, share_thumbnail 등
+2) 1:N 또는 데이터가 많이 쌓이는 영역은 테이블로 유지합니다.
+   - 예: gallery_photo, guestbook_entry, rsvp_response, notice_group/item, donation_group/account,
+         transport_item, wreath_order, payment_event_log, snap_upload 등
+3) 공용 카탈로그 성격의 데이터는 테이블로 유지합니다.
+   - 예: music_track, wreath_item, design_template
+4) Money(금액)는 Minor unit 정수(BIGINT)로 저장합니다.
+   - 예: VND(1=1동), KRW(1=1원), USD(100=1달러 센트)
+*/
 
 /* =========================================================
-   1) USER (Google login only)
+   PART 1) USER & AUTH
    ========================================================= */
 
+/* [Table 01] user_account - 사용자 기본 정보 (Google 로그인 기반) */
 CREATE TABLE `user_account` (
                                 `id`            BINARY(16) NOT NULL,
                                 `google_sub`    VARCHAR(128) NOT NULL COMMENT 'Google sub (unique user id)',
                                 `email`         VARCHAR(255) NULL,
                                 `display_name`  VARCHAR(120) NULL,
-                                `locale`        VARCHAR(10) NOT NULL DEFAULT 'vi',
-                                `timezone`      VARCHAR(64) NOT NULL DEFAULT 'Asia/Ho_Chi_Minh',
+                                `locale`        VARCHAR(10)  NOT NULL DEFAULT 'vi',
+                                `timezone`      VARCHAR(64)  NOT NULL DEFAULT 'Asia/Ho_Chi_Minh',
 
                                 `created_at`    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
                                 `updated_at`    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -37,19 +52,19 @@ CREATE TABLE `user_account` (
                                 KEY `idx_user_account_revoked_at` (`revoked_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- (선택) Snap(구글 드라이브) 기능을 위해 토큰 저장이 필요할 때만 사용
+/* [Table 02] user_google_oauth - (선택) Snap/구글드라이브 연동용 OAuth 토큰 저장 (App 레벨 암호화 전제) */
 CREATE TABLE `user_google_oauth` (
-                                     `id`               BINARY(16) NOT NULL,
-                                     `user_id`          BINARY(16) NOT NULL,
+                                     `id`                BINARY(16) NOT NULL,
+                                     `user_id`            BINARY(16) NOT NULL,
 
-                                     `access_token_enc`  TEXT NULL,
-                                     `refresh_token_enc` TEXT NULL,
-                                     `token_expires_at`  DATETIME NULL,
-                                     `scopes`            TEXT NULL,
+                                     `access_token_enc`   TEXT NULL COMMENT 'App 레벨 암호화 필수',
+                                     `refresh_token_enc`  TEXT NULL COMMENT 'App 레벨 암호화 필수',
+                                     `token_expires_at`   DATETIME NULL,
+                                     `scopes`             TEXT NULL,
 
-                                     `created_at`       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                                     `updated_at`       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-                                     `revoked_at`       DATETIME NULL,
+                                     `created_at`         DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                                     `updated_at`         DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                                     `revoked_at`         DATETIME NULL,
 
                                      PRIMARY KEY (`id`),
                                      UNIQUE KEY `uq_user_google_oauth_user_id` (`user_id`),
@@ -63,25 +78,32 @@ CREATE TABLE `user_google_oauth` (
 
 
 /* =========================================================
-   2) MEDIA / TEMPLATE / CARD (root)
+   PART 2) MEDIA
    ========================================================= */
 
+/* [Table 03] media_asset - 업로드 미디어 메타데이터 (S3 최적화: bucket/object_key 저장) */
 CREATE TABLE `media_asset` (
-                               `id`            BINARY(16) NOT NULL,
-                               `owner_user_id` BINARY(16) NULL,
+                               `id`              BINARY(16) NOT NULL,
+                               `owner_user_id`   BINARY(16) NULL,
 
-                               `kind`          VARCHAR(16) NOT NULL COMMENT 'image/video/audio/thumbnail/document/external',
-                               `url`           TEXT NOT NULL,
-                               `mime_type`     VARCHAR(128) NULL,
-                               `bytes`         BIGINT NULL,
-                               `width`         INT NULL,
-                               `height`        INT NULL,
-                               `duration_ms`   INT NULL,
+                               `storage_provider` VARCHAR(16) NOT NULL DEFAULT 'S3' COMMENT 'S3/EXTERNAL',
+                               `bucket`          VARCHAR(64)  NULL COMMENT 'S3 Bucket Name',
+                               `object_key`      VARCHAR(512) NULL COMMENT 'S3 Object Key (File Path)',
+                               `url`             TEXT NULL COMMENT 'CDN/CloudFront URL (캐시용, 변경 가능)',
 
-                               `created_at`    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                               `updated_at`    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-                               `revoked_at`    DATETIME NULL,
+                               `kind`            VARCHAR(16) NOT NULL COMMENT 'image/video/audio/thumbnail/document/external',
+                               `mime_type`       VARCHAR(128) NULL,
+                               `bytes`           BIGINT NULL,
+                               `width`           INT NULL,
+                               `height`          INT NULL,
+                               `duration_ms`     INT NULL,
 
+                               `created_at`      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                               `updated_at`      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                               `revoked_at`      DATETIME NULL,
+
+                               CONSTRAINT `chk_media_asset_provider`
+                                   CHECK (`storage_provider` IN ('S3','EXTERNAL')),
                                CONSTRAINT `chk_media_asset_kind`
                                    CHECK (`kind` IN ('image','video','audio','thumbnail','document','external')),
 
@@ -94,18 +116,25 @@ CREATE TABLE `media_asset` (
                                        ON UPDATE RESTRICT ON DELETE RESTRICT
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-CREATE TABLE `design_template` (
-                                   `id`              BINARY(16) NOT NULL,
-                                   `kind`            VARCHAR(32) NOT NULL DEFAULT 'invitation' COMMENT 'invitation/wedding_video/thankyou_card',
-                                   `name`            VARCHAR(120) NOT NULL,
-                                   `description`     TEXT NULL,
-                                   `preview_media_id` BINARY(16) NULL,
-                                   `config_json`     LONGTEXT NULL,
-                                   `is_active`       TINYINT(1) NOT NULL DEFAULT 1,
 
-                                   `created_at`      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                                   `updated_at`      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-                                   `revoked_at`      DATETIME NULL,
+/* =========================================================
+   PART 3) TEMPLATE / MUSIC CATALOG
+   ========================================================= */
+
+/* [Table 04] design_template - 디자인 템플릿(프리셋), 카드가 선택해 사용 */
+CREATE TABLE `design_template` (
+                                   `id`               BINARY(16) NOT NULL,
+                                   `kind`             VARCHAR(32) NOT NULL DEFAULT 'invitation' COMMENT 'invitation/wedding_video/thankyou_card',
+                                   `name`             VARCHAR(120) NOT NULL,
+                                   `description`      TEXT NULL,
+                                   `preview_media_id` BINARY(16) NULL,
+
+                                   `default_config_json` LONGTEXT NULL CHECK (JSON_VALID(`default_config_json`)),
+                                   `is_active`        TINYINT(1) NOT NULL DEFAULT 1,
+
+                                   `created_at`       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                                   `updated_at`       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                                   `revoked_at`       DATETIME NULL,
 
                                    CONSTRAINT `chk_design_template_kind`
                                        CHECK (`kind` IN ('invitation','wedding_video','thankyou_card')),
@@ -120,23 +149,193 @@ CREATE TABLE `design_template` (
                                            ON UPDATE RESTRICT ON DELETE RESTRICT
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+/* [Table 05] music_track - 배경음악 공용 카탈로그(관리/검색/활성화 필요하므로 테이블 유지) */
+CREATE TABLE `music_track` (
+                               `id`             BINARY(16) NOT NULL,
+                               `name`           VARCHAR(200) NOT NULL,
+                               `artist`         VARCHAR(200) NULL,
+                               `audio_media_id` BINARY(16) NULL,
+                               `external_url`   TEXT NULL,
+                               `is_active`      TINYINT(1) NOT NULL DEFAULT 1,
+
+                               `created_at`     DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                               `updated_at`     DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                               `revoked_at`     DATETIME NULL,
+
+                               PRIMARY KEY (`id`),
+                               KEY `idx_music_track_active_revoked` (`is_active`, `revoked_at`),
+                               KEY `idx_music_track_audio_revoked` (`audio_media_id`, `revoked_at`),
+                               KEY `idx_music_track_revoked_at` (`revoked_at`),
+
+                               CONSTRAINT `fk_music_track_audio_media`
+                                   FOREIGN KEY (`audio_media_id`) REFERENCES `media_asset` (`id`)
+                                       ON UPDATE RESTRICT ON DELETE RESTRICT
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+
+/* =========================================================
+   PART 4) CARD (CORE) - 설정 통합(JSON)
+   ========================================================= */
+
+/* [Table 06] card - 카드 핵심(검색/정렬용 컬럼 + 모든 1:1 설정은 config_json) */
 CREATE TABLE `card` (
-                        `id`            BINARY(16) NOT NULL,
-                        `owner_user_id` BINARY(16) NOT NULL,
+                        `id`             BINARY(16) NOT NULL,
+                        `owner_user_id`  BINARY(16) NOT NULL,
 
-                        `kind`          VARCHAR(32) NOT NULL DEFAULT 'invitation' COMMENT 'invitation/wedding_video/thankyou_card',
-                        `status`        VARCHAR(16) NOT NULL DEFAULT 'draft' COMMENT 'draft/published/archived',
-                        `template_id`   BINARY(16) NULL,
+                        `kind`           VARCHAR(32) NOT NULL DEFAULT 'invitation' COMMENT 'invitation/wedding_video/thankyou_card',
+                        `status`         VARCHAR(16) NOT NULL DEFAULT 'draft' COMMENT 'draft/published/archived',
+                        `template_id`    BINARY(16) NULL,
 
-                        `slug`          VARCHAR(120) NOT NULL COMMENT 'share url slug (unique)',
-                        `share_token`   VARCHAR(128) NOT NULL COMMENT 'share token (unique)',
+                        `slug`           VARCHAR(120) NOT NULL COMMENT 'share url slug (unique)',
+                        `share_token`    VARCHAR(128) NOT NULL COMMENT 'share token (unique)',
 
-                        `currency`      CHAR(3) NOT NULL DEFAULT 'VND' COMMENT 'KRW/USD/VND',
-                        `published_at`  DATETIME NULL,
+    /* 검색/정렬/필터링에 필요한 핵심 컬럼 */
+                        `title`          VARCHAR(255) NOT NULL DEFAULT 'We are getting married',
+                        `event_at`       DATETIME NULL COMMENT '검색/정렬용 (예식 일시)',
+                        `event_timezone` VARCHAR(64) NOT NULL DEFAULT 'Asia/Ho_Chi_Minh' COMMENT '표시/변환용 타임존',
+                        `area_code`      VARCHAR(50) NULL COMMENT 'Hanoi/HCMC/Seoul etc.',
+                        `currency`       CHAR(3) NOT NULL DEFAULT 'VND' COMMENT 'KRW/USD/VND',
+                        `published_at`   DATETIME NULL,
 
-                        `created_at`    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                        `updated_at`    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-                        `revoked_at`    DATETIME NULL,
+    /* 핵심: 1:1 설정/렌더링 데이터 통합 */
+                        `config_json`    LONGTEXT NULL CHECK (JSON_VALID(`config_json`)) COMMENT '1:1 설정 통합(JSON)',
+
+    /*
+    [config_json 예시 구조 - 필요한 것만 채우는 방식]
+    {
+      "section_order": ["main_cover","greeting","event","venue","gallery","video","donation","guestbook","rsvp","notice","snap","wreath"],
+      "basic_info": {
+        "show_deceased_prefix": true,
+        "show_bride_first": false
+      },
+      "main_cover": {
+        "layout_variant": "basic",
+        "cover_media_id": "BINARY(16)",
+        "show_border_line": false,
+        "expand_photo": false,
+        "main_phrase": "...",
+        "main_phrase_effect": "none"
+      },
+      "opening_animation": {
+        "is_enabled": false,
+        "variant": "variant_1",
+        "background_color": "#000000",
+        "overlay_opacity": 0.6,
+        "is_transparent": false,
+        "ment_text": "..."
+      },
+      "share_thumbnails": [
+        { "platform": "url", "image_media_id": "BINARY(16)", "title": "...", "description": "..." },
+        { "platform": "kakao", "image_media_id": "BINARY(16)", "title": "...", "description": "..." }
+      ],
+      "greeting": {
+        "title": "...",
+        "content_html": "...",
+        "photo_media_id": "BINARY(16)",
+        "show_names_under": true
+      },
+      "event": {
+        "event_date": "2026-02-10",
+        "event_time": "12:30:00",
+        "show_calendar": true,
+        "show_dday_countdown": true,
+        "message_html": "..."
+      },
+      "venue": {
+        "title": "...",
+        "country_code": "VN",
+        "address_line1": "...",
+        "address_line2": "...",
+        "postal_code": "...",
+        "venue_name": "...",
+        "hall_name": "...",
+        "venue_phone": "...",
+        "lat": 10.1234567,
+        "lng": 106.1234567,
+        "map_provider": "google_maps",
+        "show_map": true,
+        "disable_map_drag": false,
+        "show_navigation_btn": true,
+        "map_height": "default",
+        "zoom_level": 15,
+        "show_street_view": false
+      },
+      "gallery_setting": {
+        "title": "...",
+        "gallery_type": "swipe",
+        "open_popup_on_tap": true,
+        "allow_zoom_in_popup": false
+      },
+      "video": {
+        "is_enabled": true,
+        "title": "...",
+        "youtube_url": "...",
+        "aspect_ratio": "16:9"
+      },
+      "mid_photo": {
+        "media_id": "BINARY(16)",
+        "effect": "none"
+      },
+      "background_music": {
+        "autoplay": false,
+        "track_id": "BINARY(16)",
+        "custom_audio_url": null,
+        "track_snapshot": { "name": "...", "artist": "...", "audio_url": "..." }
+      },
+      "contact_setting": {
+        "is_enabled": true,
+        "show_groom": true,
+        "show_bride": true,
+        "show_groom_father": true,
+        "show_groom_mother": true,
+        "show_bride_father": true,
+        "show_bride_mother": true
+      },
+      "donation_setting": {
+        "title": "...",
+        "content_html": "...",
+        "display_type": "accordion"
+      },
+      "guestbook_setting": {
+        "title": "...",
+        "entry_visibility": "public",
+        "design_type": "basic",
+        "hide_entry_date": false
+      },
+      "rsvp_setting": {
+        "title": "...",
+        "content_html": "...",
+        "button_label": "...",
+        "include_guest_count": true,
+        "include_phone": true,
+        "include_meal": true,
+        "include_extra_message": true,
+        "include_bus": false
+      },
+      "interview_setting": {
+        "title": "...",
+        "content_html": "...",
+        "groom_photo_media_id": "BINARY(16)",
+        "bride_photo_media_id": "BINARY(16)"
+      },
+      "wreath_setting": {
+        "is_enabled": false,
+        "display_mode": "floating_menu",
+        "show_wreath_list": true
+      },
+      "snap_setting": {
+        "is_enabled": false,
+        "drive_folder_id": "...",
+        "drive_folder_name": "...",
+        "title": "...",
+        "description": "..."
+      }
+    }
+    */
+
+                        `created_at`     DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        `updated_at`     DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                        `revoked_at`     DATETIME NULL,
 
                         CONSTRAINT `chk_card_kind`
                             CHECK (`kind` IN ('invitation','wedding_video','thankyou_card')),
@@ -151,6 +350,7 @@ CREATE TABLE `card` (
                         KEY `idx_card_owner_revoked` (`owner_user_id`, `revoked_at`),
                         KEY `idx_card_status_revoked` (`status`, `revoked_at`),
                         KEY `idx_card_template_revoked` (`template_id`, `revoked_at`),
+                        KEY `idx_card_event_at` (`event_at`),
                         KEY `idx_card_revoked_at` (`revoked_at`),
 
                         CONSTRAINT `fk_card_owner`
@@ -163,59 +363,10 @@ CREATE TABLE `card` (
 
 
 /* =========================================================
-   3) SECTION ORDER (순서 변경)
+   PART 5) CARD CONTENT LIST (1:N 유지)
    ========================================================= */
 
-CREATE TABLE `card_section_order` (
-                                      `id`           BINARY(16) NOT NULL,
-                                      `card_id`       BINARY(16) NOT NULL,
-                                      `section_key`   VARCHAR(64) NOT NULL,
-                                      `sort_order`    INT NOT NULL,
-                                      `is_enabled`    TINYINT(1) NOT NULL DEFAULT 1,
-
-                                      `created_at`    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                                      `updated_at`    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-                                      `revoked_at`    DATETIME NULL,
-
-                                      CONSTRAINT `chk_card_section_order_sort`
-                                          CHECK (`sort_order` >= 1),
-
-                                      PRIMARY KEY (`id`),
-                                      UNIQUE KEY `uq_card_section_order_key` (`card_id`, `section_key`),
-                                      UNIQUE KEY `uq_card_section_order_sort` (`card_id`, `sort_order`),
-                                      KEY `idx_card_section_order_card_revoked` (`card_id`, `revoked_at`),
-                                      KEY `idx_card_section_order_revoked_at` (`revoked_at`),
-
-                                      CONSTRAINT `fk_card_section_order_card`
-                                          FOREIGN KEY (`card_id`) REFERENCES `card` (`id`)
-                                              ON UPDATE RESTRICT ON DELETE RESTRICT
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
-
-/* =========================================================
-   4) PEOPLE / BASIC INFO (세례명 포함)
-   ========================================================= */
-
-CREATE TABLE `card_basic_info_setting` (
-                                           `id`               BINARY(16) NOT NULL,
-                                           `card_id`          BINARY(16) NOT NULL,
-
-                                           `show_deceased_prefix` TINYINT(1) NOT NULL DEFAULT 1 COMMENT '故 표시',
-                                           `show_bride_first`     TINYINT(1) NOT NULL DEFAULT 0,
-
-                                           `created_at`       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                                           `updated_at`       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-                                           `revoked_at`       DATETIME NULL,
-
-                                           PRIMARY KEY (`id`),
-                                           UNIQUE KEY `uq_card_basic_info_setting_card` (`card_id`),
-                                           KEY `idx_card_basic_info_setting_revoked_at` (`revoked_at`),
-
-                                           CONSTRAINT `fk_card_basic_info_setting_card`
-                                               FOREIGN KEY (`card_id`) REFERENCES `card` (`id`)
-                                                   ON UPDATE RESTRICT ON DELETE RESTRICT
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
+/* [Table 07] card_person - 인물 정보(신랑/신부/부/모 등), 카드별 역할 1개씩 */
 CREATE TABLE `card_person` (
                                `id`            BINARY(16) NOT NULL,
                                `card_id`       BINARY(16) NOT NULL,
@@ -246,213 +397,7 @@ CREATE TABLE `card_person` (
                                        ON UPDATE RESTRICT ON DELETE RESTRICT
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-
-/* =========================================================
-   5) MAIN COVER / OPENING ANIMATION / THUMBNAILS
-   ========================================================= */
-
-CREATE TABLE `card_main_cover` (
-                                   `id`              BINARY(16) NOT NULL,
-                                   `card_id`         BINARY(16) NOT NULL,
-
-                                   `layout_variant`  VARCHAR(32) NOT NULL DEFAULT 'basic' COMMENT 'basic/fill/arch/oval/frame',
-                                   `cover_media_id`  BINARY(16) NULL,
-
-                                   `show_border_line` TINYINT(1) NOT NULL DEFAULT 0,
-                                   `expand_photo`     TINYINT(1) NOT NULL DEFAULT 0,
-
-                                   `main_phrase`      TEXT NULL,
-                                   `main_phrase_effect` VARCHAR(16) NOT NULL DEFAULT 'none' COMMENT 'none/fog/wave/paper',
-
-                                   `created_at`      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                                   `updated_at`      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-                                   `revoked_at`      DATETIME NULL,
-
-                                   CONSTRAINT `chk_card_main_cover_layout`
-                                       CHECK (`layout_variant` IN ('basic','fill','arch','oval','frame')),
-                                   CONSTRAINT `chk_card_main_cover_effect`
-                                       CHECK (`main_phrase_effect` IN ('none','fog','wave','paper')),
-
-                                   PRIMARY KEY (`id`),
-                                   UNIQUE KEY `uq_card_main_cover_card` (`card_id`),
-                                   KEY `idx_card_main_cover_media_revoked` (`cover_media_id`, `revoked_at`),
-                                   KEY `idx_card_main_cover_revoked_at` (`revoked_at`),
-
-                                   CONSTRAINT `fk_card_main_cover_card`
-                                       FOREIGN KEY (`card_id`) REFERENCES `card` (`id`)
-                                           ON UPDATE RESTRICT ON DELETE RESTRICT,
-                                   CONSTRAINT `fk_card_main_cover_media`
-                                       FOREIGN KEY (`cover_media_id`) REFERENCES `media_asset` (`id`)
-                                           ON UPDATE RESTRICT ON DELETE RESTRICT
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
-CREATE TABLE `card_opening_animation` (
-                                          `id`              BINARY(16) NOT NULL,
-                                          `card_id`         BINARY(16) NOT NULL,
-
-                                          `is_enabled`      TINYINT(1) NOT NULL DEFAULT 0,
-                                          `variant`         VARCHAR(16) NOT NULL DEFAULT 'variant_1' COMMENT 'variant_1/variant_2',
-                                          `background_color` VARCHAR(16) NULL,
-                                          `overlay_opacity`  DECIMAL(4,3) NULL,
-                                          `is_transparent`   TINYINT(1) NOT NULL DEFAULT 0,
-                                          `ment_text`        TEXT NULL,
-
-                                          `created_at`      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                                          `updated_at`      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-                                          `revoked_at`      DATETIME NULL,
-
-                                          CONSTRAINT `chk_card_opening_variant`
-                                              CHECK (`variant` IN ('variant_1','variant_2')),
-                                          CONSTRAINT `chk_card_opening_opacity`
-                                              CHECK (`overlay_opacity` IS NULL OR (`overlay_opacity` >= 0 AND `overlay_opacity` <= 1)),
-
-                                          PRIMARY KEY (`id`),
-                                          UNIQUE KEY `uq_card_opening_animation_card` (`card_id`),
-                                          KEY `idx_card_opening_animation_revoked_at` (`revoked_at`),
-
-                                          CONSTRAINT `fk_card_opening_animation_card`
-                                              FOREIGN KEY (`card_id`) REFERENCES `card` (`id`)
-                                                  ON UPDATE RESTRICT ON DELETE RESTRICT
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
-CREATE TABLE `card_share_thumbnail` (
-                                        `id`             BINARY(16) NOT NULL,
-                                        `card_id`        BINARY(16) NOT NULL,
-
-                                        `platform`       VARCHAR(16) NOT NULL COMMENT 'url/kakao',
-                                        `image_media_id` BINARY(16) NULL,
-
-                                        `title`          TEXT NULL,
-                                        `description`    TEXT NULL,
-
-                                        `created_at`     DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                                        `updated_at`     DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-                                        `revoked_at`     DATETIME NULL,
-
-                                        CONSTRAINT `chk_card_share_thumbnail_platform`
-                                            CHECK (`platform` IN ('url','kakao')),
-
-                                        PRIMARY KEY (`id`),
-                                        UNIQUE KEY `uq_card_share_thumbnail_card_platform` (`card_id`, `platform`),
-                                        KEY `idx_card_share_thumbnail_card_revoked` (`card_id`, `revoked_at`),
-                                        KEY `idx_card_share_thumbnail_media_revoked` (`image_media_id`, `revoked_at`),
-                                        KEY `idx_card_share_thumbnail_revoked_at` (`revoked_at`),
-
-                                        CONSTRAINT `fk_card_share_thumbnail_card`
-                                            FOREIGN KEY (`card_id`) REFERENCES `card` (`id`)
-                                                ON UPDATE RESTRICT ON DELETE RESTRICT,
-                                        CONSTRAINT `fk_card_share_thumbnail_media`
-                                            FOREIGN KEY (`image_media_id`) REFERENCES `media_asset` (`id`)
-                                                ON UPDATE RESTRICT ON DELETE RESTRICT
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
-
-/* =========================================================
-   6) GREETING / EVENT DATETIME / VENUE / TRANSPORT
-   ========================================================= */
-
-CREATE TABLE `card_greeting` (
-                                 `id`            BINARY(16) NOT NULL,
-                                 `card_id`       BINARY(16) NOT NULL,
-
-                                 `title`         TEXT NULL,
-                                 `content_html`  LONGTEXT NULL,
-                                 `photo_media_id` BINARY(16) NULL,
-                                 `show_names_under` TINYINT(1) NOT NULL DEFAULT 1,
-
-                                 `created_at`    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                                 `updated_at`    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-                                 `revoked_at`    DATETIME NULL,
-
-                                 PRIMARY KEY (`id`),
-                                 UNIQUE KEY `uq_card_greeting_card` (`card_id`),
-                                 KEY `idx_card_greeting_photo_revoked` (`photo_media_id`, `revoked_at`),
-                                 KEY `idx_card_greeting_revoked_at` (`revoked_at`),
-
-                                 CONSTRAINT `fk_card_greeting_card`
-                                     FOREIGN KEY (`card_id`) REFERENCES `card` (`id`)
-                                         ON UPDATE RESTRICT ON DELETE RESTRICT,
-                                 CONSTRAINT `fk_card_greeting_photo`
-                                     FOREIGN KEY (`photo_media_id`) REFERENCES `media_asset` (`id`)
-                                         ON UPDATE RESTRICT ON DELETE RESTRICT
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
-CREATE TABLE `card_event_datetime` (
-                                       `id`              BINARY(16) NOT NULL,
-                                       `card_id`         BINARY(16) NOT NULL,
-
-                                       `event_date`      DATE NOT NULL,
-                                       `event_time`      TIME NULL,
-                                       `timezone`        VARCHAR(64) NOT NULL DEFAULT 'Asia/Ho_Chi_Minh',
-
-                                       `show_calendar`      TINYINT(1) NOT NULL DEFAULT 1,
-                                       `show_dday_countdown` TINYINT(1) NOT NULL DEFAULT 1,
-                                       `message_html`      LONGTEXT NULL,
-
-                                       `created_at`      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                                       `updated_at`      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-                                       `revoked_at`      DATETIME NULL,
-
-                                       PRIMARY KEY (`id`),
-                                       UNIQUE KEY `uq_card_event_datetime_card` (`card_id`),
-                                       KEY `idx_card_event_datetime_date` (`event_date`),
-                                       KEY `idx_card_event_datetime_revoked_at` (`revoked_at`),
-
-                                       CONSTRAINT `fk_card_event_datetime_card`
-                                           FOREIGN KEY (`card_id`) REFERENCES `card` (`id`)
-                                               ON UPDATE RESTRICT ON DELETE RESTRICT
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
-CREATE TABLE `card_venue` (
-                              `id`               BINARY(16) NOT NULL,
-                              `card_id`          BINARY(16) NOT NULL,
-
-                              `title`            TEXT NULL,
-                              `country_code`     VARCHAR(8) NULL,
-
-                              `address_line1`    TEXT NULL,
-                              `address_line2`    TEXT NULL,
-                              `postal_code`      VARCHAR(20) NULL,
-
-                              `venue_name`       VARCHAR(200) NULL,
-                              `hall_name`        VARCHAR(200) NULL,
-                              `venue_phone`      VARCHAR(40) NULL,
-
-                              `lat`              DECIMAL(10,7) NULL,
-                              `lng`              DECIMAL(10,7) NULL,
-                              `map_provider`     VARCHAR(16) NOT NULL DEFAULT 'google_maps' COMMENT 'google_maps/none',
-                              `show_map`         TINYINT(1) NOT NULL DEFAULT 1,
-                              `disable_map_drag` TINYINT(1) NOT NULL DEFAULT 0,
-                              `show_navigation_btn` TINYINT(1) NOT NULL DEFAULT 1,
-                              `map_height`       VARCHAR(16) NOT NULL DEFAULT 'default' COMMENT 'default/compact',
-                              `zoom_level`       SMALLINT NOT NULL DEFAULT 15,
-                              `show_street_view` TINYINT(1) NOT NULL DEFAULT 0,
-
-                              `created_at`       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                              `updated_at`       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-                              `revoked_at`       DATETIME NULL,
-
-                              CONSTRAINT `chk_card_venue_map_provider`
-                                  CHECK (`map_provider` IN ('google_maps','none')),
-                              CONSTRAINT `chk_card_venue_map_height`
-                                  CHECK (`map_height` IN ('default','compact')),
-                              CONSTRAINT `chk_card_venue_zoom`
-                                  CHECK (`zoom_level` >= 0 AND `zoom_level` <= 22),
-                              CONSTRAINT `chk_card_venue_lat`
-                                  CHECK (`lat` IS NULL OR (`lat` >= -90 AND `lat` <= 90)),
-                              CONSTRAINT `chk_card_venue_lng`
-                                  CHECK (`lng` IS NULL OR (`lng` >= -180 AND `lng` <= 180)),
-
-                              PRIMARY KEY (`id`),
-                              UNIQUE KEY `uq_card_venue_card` (`card_id`),
-                              KEY `idx_card_venue_card_revoked` (`card_id`, `revoked_at`),
-                              KEY `idx_card_venue_revoked_at` (`revoked_at`),
-
-                              CONSTRAINT `fk_card_venue_card`
-                                  FOREIGN KEY (`card_id`) REFERENCES `card` (`id`)
-                                      ON UPDATE RESTRICT ON DELETE RESTRICT
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
+/* [Table 08] card_transport_item - 교통편 안내(정렬 가능한 리스트) */
 CREATE TABLE `card_transport_item` (
                                        `id`            BINARY(16) NOT NULL,
                                        `card_id`       BINARY(16) NOT NULL,
@@ -478,47 +423,18 @@ CREATE TABLE `card_transport_item` (
                                                ON UPDATE RESTRICT ON DELETE RESTRICT
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-
-/* =========================================================
-   7) GALLERY / VIDEO / MID PHOTO
-   ========================================================= */
-
-CREATE TABLE `card_gallery_setting` (
-                                        `id`             BINARY(16) NOT NULL,
-                                        `card_id`        BINARY(16) NOT NULL,
-
-                                        `title`          TEXT NULL,
-                                        `gallery_type`   VARCHAR(24) NOT NULL DEFAULT 'swipe' COMMENT 'swipe/thumbnail_swipe/grid',
-                                        `open_popup_on_tap` TINYINT(1) NOT NULL DEFAULT 1,
-                                        `allow_zoom_in_popup` TINYINT(1) NOT NULL DEFAULT 0,
-
-                                        `created_at`     DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                                        `updated_at`     DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-                                        `revoked_at`     DATETIME NULL,
-
-                                        CONSTRAINT `chk_card_gallery_setting_type`
-                                            CHECK (`gallery_type` IN ('swipe','thumbnail_swipe','grid')),
-
-                                        PRIMARY KEY (`id`),
-                                        UNIQUE KEY `uq_card_gallery_setting_card` (`card_id`),
-                                        KEY `idx_card_gallery_setting_revoked_at` (`revoked_at`),
-
-                                        CONSTRAINT `fk_card_gallery_setting_card`
-                                            FOREIGN KEY (`card_id`) REFERENCES `card` (`id`)
-                                                ON UPDATE RESTRICT ON DELETE RESTRICT
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
+/* [Table 09] card_gallery_photo - 갤러리 사진(대량/정렬/추가삭제 빈번) */
 CREATE TABLE `card_gallery_photo` (
-                                      `id`          BINARY(16) NOT NULL,
-                                      `card_id`     BINARY(16) NOT NULL,
-                                      `media_id`    BINARY(16) NOT NULL,
+                                      `id`           BINARY(16) NOT NULL,
+                                      `card_id`      BINARY(16) NOT NULL,
+                                      `media_id`     BINARY(16) NOT NULL,
 
-                                      `sort_order`  INT NOT NULL DEFAULT 1,
-                                      `caption`     TEXT NULL,
+                                      `sort_order`   INT NOT NULL DEFAULT 1,
+                                      `caption`      TEXT NULL,
 
-                                      `created_at`  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                                      `updated_at`  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-                                      `revoked_at`  DATETIME NULL,
+                                      `created_at`   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                                      `updated_at`   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                                      `revoked_at`   DATETIME NULL,
 
                                       CONSTRAINT `chk_card_gallery_photo_sort`
                                           CHECK (`sort_order` >= 1),
@@ -537,181 +453,18 @@ CREATE TABLE `card_gallery_photo` (
                                               ON UPDATE RESTRICT ON DELETE RESTRICT
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-CREATE TABLE `card_video` (
-                              `id`           BINARY(16) NOT NULL,
-                              `card_id`      BINARY(16) NOT NULL,
-
-                              `title`        TEXT NULL,
-                              `youtube_url`  TEXT NULL,
-                              `aspect_ratio` VARCHAR(16) NOT NULL DEFAULT 'default' COMMENT 'default/16:9/9:16/1:1',
-
-                              `created_at`   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                              `updated_at`   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-                              `revoked_at`   DATETIME NULL,
-
-                              CONSTRAINT `chk_card_video_aspect`
-                                  CHECK (`aspect_ratio` IN ('default','16:9','9:16','1:1')),
-
-                              PRIMARY KEY (`id`),
-                              UNIQUE KEY `uq_card_video_card` (`card_id`),
-                              KEY `idx_card_video_revoked_at` (`revoked_at`),
-
-                              CONSTRAINT `fk_card_video_card`
-                                  FOREIGN KEY (`card_id`) REFERENCES `card` (`id`)
-                                      ON UPDATE RESTRICT ON DELETE RESTRICT
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
-CREATE TABLE `card_mid_photo` (
-                                  `id`         BINARY(16) NOT NULL,
-                                  `card_id`    BINARY(16) NOT NULL,
-                                  `media_id`   BINARY(16) NULL,
-
-                                  `effect`     VARCHAR(16) NOT NULL DEFAULT 'none' COMMENT 'none/fog/wave/paper',
-
-                                  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                                  `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-                                  `revoked_at` DATETIME NULL,
-
-                                  CONSTRAINT `chk_card_mid_photo_effect`
-                                      CHECK (`effect` IN ('none','fog','wave','paper')),
-
-                                  PRIMARY KEY (`id`),
-                                  UNIQUE KEY `uq_card_mid_photo_card` (`card_id`),
-                                  KEY `idx_card_mid_photo_media_revoked` (`media_id`, `revoked_at`),
-                                  KEY `idx_card_mid_photo_revoked_at` (`revoked_at`),
-
-                                  CONSTRAINT `fk_card_mid_photo_card`
-                                      FOREIGN KEY (`card_id`) REFERENCES `card` (`id`)
-                                          ON UPDATE RESTRICT ON DELETE RESTRICT,
-                                  CONSTRAINT `fk_card_mid_photo_media`
-                                      FOREIGN KEY (`media_id`) REFERENCES `media_asset` (`id`)
-                                          ON UPDATE RESTRICT ON DELETE RESTRICT
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
-
-/* =========================================================
-   8) BACKGROUND MUSIC
-   ========================================================= */
-
-CREATE TABLE `music_track` (
-                               `id`            BINARY(16) NOT NULL,
-                               `name`          VARCHAR(200) NOT NULL,
-                               `artist`        VARCHAR(200) NULL,
-                               `audio_media_id` BINARY(16) NULL,
-                               `external_url`  TEXT NULL,
-                               `is_active`     TINYINT(1) NOT NULL DEFAULT 1,
-
-                               `created_at`    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                               `updated_at`    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-                               `revoked_at`    DATETIME NULL,
-
-                               PRIMARY KEY (`id`),
-                               KEY `idx_music_track_active_revoked` (`is_active`, `revoked_at`),
-                               KEY `idx_music_track_audio_revoked` (`audio_media_id`, `revoked_at`),
-                               KEY `idx_music_track_revoked_at` (`revoked_at`),
-
-                               CONSTRAINT `fk_music_track_audio_media`
-                                   FOREIGN KEY (`audio_media_id`) REFERENCES `media_asset` (`id`)
-                                       ON UPDATE RESTRICT ON DELETE RESTRICT
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
-CREATE TABLE `card_background_music` (
-                                         `id`             BINARY(16) NOT NULL,
-                                         `card_id`        BINARY(16) NOT NULL,
-
-                                         `track_id`       BINARY(16) NULL,
-                                         `custom_audio_url` TEXT NULL,
-                                         `autoplay`       TINYINT(1) NOT NULL DEFAULT 0,
-
-                                         `created_at`     DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                                         `updated_at`     DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-                                         `revoked_at`     DATETIME NULL,
-
-                                         CONSTRAINT `chk_card_background_music_source`
-                                             CHECK (
-                                                 (`track_id` IS NOT NULL AND `custom_audio_url` IS NULL)
-                                                     OR (`track_id` IS NULL AND `custom_audio_url` IS NOT NULL)
-                                                     OR (`track_id` IS NULL AND `custom_audio_url` IS NULL)
-                                                 ),
-
-                                         PRIMARY KEY (`id`),
-                                         UNIQUE KEY `uq_card_background_music_card` (`card_id`),
-                                         KEY `idx_card_background_music_track_revoked` (`track_id`, `revoked_at`),
-                                         KEY `idx_card_background_music_revoked_at` (`revoked_at`),
-
-                                         CONSTRAINT `fk_card_background_music_card`
-                                             FOREIGN KEY (`card_id`) REFERENCES `card` (`id`)
-                                                 ON UPDATE RESTRICT ON DELETE RESTRICT,
-                                         CONSTRAINT `fk_card_background_music_track`
-                                             FOREIGN KEY (`track_id`) REFERENCES `music_track` (`id`)
-                                                 ON UPDATE RESTRICT ON DELETE RESTRICT
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
-
-/* =========================================================
-   9) CONTACT / DONATION / GUESTBOOK / RSVP
-   ========================================================= */
-
-CREATE TABLE `card_contact_setting` (
-                                        `id`         BINARY(16) NOT NULL,
-                                        `card_id`    BINARY(16) NOT NULL,
-
-                                        `is_enabled`        TINYINT(1) NOT NULL DEFAULT 1,
-                                        `show_groom`        TINYINT(1) NOT NULL DEFAULT 1,
-                                        `show_bride`        TINYINT(1) NOT NULL DEFAULT 1,
-                                        `show_groom_father` TINYINT(1) NOT NULL DEFAULT 1,
-                                        `show_groom_mother` TINYINT(1) NOT NULL DEFAULT 1,
-                                        `show_bride_father` TINYINT(1) NOT NULL DEFAULT 1,
-                                        `show_bride_mother` TINYINT(1) NOT NULL DEFAULT 1,
-
-                                        `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                                        `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-                                        `revoked_at` DATETIME NULL,
-
-                                        PRIMARY KEY (`id`),
-                                        UNIQUE KEY `uq_card_contact_setting_card` (`card_id`),
-                                        KEY `idx_card_contact_setting_revoked_at` (`revoked_at`),
-
-                                        CONSTRAINT `fk_card_contact_setting_card`
-                                            FOREIGN KEY (`card_id`) REFERENCES `card` (`id`)
-                                                ON UPDATE RESTRICT ON DELETE RESTRICT
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
-CREATE TABLE `card_donation_setting` (
-                                         `id`         BINARY(16) NOT NULL,
-                                         `card_id`    BINARY(16) NOT NULL,
-
-                                         `title`      TEXT NULL,
-                                         `content_html` LONGTEXT NULL,
-                                         `display_type` VARCHAR(16) NOT NULL DEFAULT 'accordion' COMMENT 'accordion/swipe',
-
-                                         `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                                         `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-                                         `revoked_at` DATETIME NULL,
-
-                                         CONSTRAINT `chk_card_donation_display_type`
-                                             CHECK (`display_type` IN ('accordion','swipe')),
-
-                                         PRIMARY KEY (`id`),
-                                         UNIQUE KEY `uq_card_donation_setting_card` (`card_id`),
-                                         KEY `idx_card_donation_setting_revoked_at` (`revoked_at`),
-
-                                         CONSTRAINT `fk_card_donation_setting_card`
-                                             FOREIGN KEY (`card_id`) REFERENCES `card` (`id`)
-                                                 ON UPDATE RESTRICT ON DELETE RESTRICT
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
+/* [Table 10] card_donation_group - 축의금/계좌 그룹(카드별 다수 가능) */
 CREATE TABLE `card_donation_group` (
-                                       `id`         BINARY(16) NOT NULL,
-                                       `card_id`    BINARY(16) NOT NULL,
+                                       `id`           BINARY(16) NOT NULL,
+                                       `card_id`      BINARY(16) NOT NULL,
 
-                                       `sort_order` INT NOT NULL DEFAULT 1,
-                                       `title`      TEXT NULL,
+                                       `sort_order`   INT NOT NULL DEFAULT 1,
+                                       `title`        TEXT NULL,
                                        `is_collapsed` TINYINT(1) NOT NULL DEFAULT 1,
 
-                                       `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                                       `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-                                       `revoked_at` DATETIME NULL,
+                                       `created_at`   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                                       `updated_at`   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                                       `revoked_at`   DATETIME NULL,
 
                                        CONSTRAINT `chk_card_donation_group_sort`
                                            CHECK (`sort_order` >= 1),
@@ -726,18 +479,19 @@ CREATE TABLE `card_donation_group` (
                                                ON UPDATE RESTRICT ON DELETE RESTRICT
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+/* [Table 11] card_donation_account - 축의금/계좌 항목(그룹 하위 리스트) */
 CREATE TABLE `card_donation_account` (
-                                         `id`          BINARY(16) NOT NULL,
-                                         `group_id`    BINARY(16) NOT NULL,
+                                         `id`             BINARY(16) NOT NULL,
+                                         `group_id`       BINARY(16) NOT NULL,
 
-                                         `sort_order`  INT NOT NULL DEFAULT 1,
+                                         `sort_order`     INT NOT NULL DEFAULT 1,
                                          `account_holder` VARCHAR(120) NULL,
-                                         `bank_name`   VARCHAR(120) NULL,
+                                         `bank_name`      VARCHAR(120) NULL,
                                          `account_number` VARCHAR(120) NULL,
 
-                                         `created_at`  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                                         `updated_at`  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-                                         `revoked_at`  DATETIME NULL,
+                                         `created_at`     DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                                         `updated_at`     DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                                         `revoked_at`     DATETIME NULL,
 
                                          CONSTRAINT `chk_card_donation_account_sort`
                                              CHECK (`sort_order` >= 1),
@@ -752,47 +506,107 @@ CREATE TABLE `card_donation_account` (
                                                  ON UPDATE RESTRICT ON DELETE RESTRICT
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-CREATE TABLE `card_guestbook_setting` (
-                                          `id`         BINARY(16) NOT NULL,
-                                          `card_id`    BINARY(16) NOT NULL,
+/* [Table 12] card_notice_group - 안내사항 그룹(카드별 다수/정렬) */
+CREATE TABLE `card_notice_group` (
+                                     `id`          BINARY(16) NOT NULL,
+                                     `card_id`     BINARY(16) NOT NULL,
 
-                                          `title`      TEXT NULL,
-                                          `entry_visibility` VARCHAR(16) NOT NULL DEFAULT 'public' COMMENT 'public/private',
-                                          `design_type` VARCHAR(16) NOT NULL DEFAULT 'basic' COMMENT 'basic/postit/button_popup',
-                                          `hide_entry_date` TINYINT(1) NOT NULL DEFAULT 0,
+                                     `group_type`  VARCHAR(16) NOT NULL DEFAULT 'grouped' COMMENT 'grouped/separate',
+                                     `sort_order`  INT NOT NULL DEFAULT 1,
+                                     `title`       TEXT NULL,
 
-                                          `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                                          `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-                                          `revoked_at` DATETIME NULL,
+                                     `created_at`  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                                     `updated_at`  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                                     `revoked_at`  DATETIME NULL,
 
-                                          CONSTRAINT `chk_card_guestbook_visibility`
-                                              CHECK (`entry_visibility` IN ('public','private')),
-                                          CONSTRAINT `chk_card_guestbook_design_type`
-                                              CHECK (`design_type` IN ('basic','postit','button_popup')),
+                                     CONSTRAINT `chk_card_notice_group_type`
+                                         CHECK (`group_type` IN ('grouped','separate')),
+                                     CONSTRAINT `chk_card_notice_group_sort`
+                                         CHECK (`sort_order` >= 1),
 
-                                          PRIMARY KEY (`id`),
-                                          UNIQUE KEY `uq_card_guestbook_setting_card` (`card_id`),
-                                          KEY `idx_card_guestbook_setting_revoked_at` (`revoked_at`),
+                                     PRIMARY KEY (`id`),
+                                     UNIQUE KEY `uq_card_notice_group_sort` (`card_id`, `sort_order`),
+                                     KEY `idx_card_notice_group_card_revoked` (`card_id`, `revoked_at`),
+                                     KEY `idx_card_notice_group_revoked_at` (`revoked_at`),
 
-                                          CONSTRAINT `fk_card_guestbook_setting_card`
-                                              FOREIGN KEY (`card_id`) REFERENCES `card` (`id`)
-                                                  ON UPDATE RESTRICT ON DELETE RESTRICT
+                                     CONSTRAINT `fk_card_notice_group_card`
+                                         FOREIGN KEY (`card_id`) REFERENCES `card` (`id`)
+                                             ON UPDATE RESTRICT ON DELETE RESTRICT
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-CREATE TABLE `card_guestbook_entry` (
-                                        `id`         BINARY(16) NOT NULL,
-                                        `card_id`    BINARY(16) NOT NULL,
+/* [Table 13] card_notice_item - 안내사항 항목(그룹 하위 리스트) */
+CREATE TABLE `card_notice_item` (
+                                    `id`           BINARY(16) NOT NULL,
+                                    `group_id`     BINARY(16) NOT NULL,
 
-                                        `author_name` VARCHAR(120) NOT NULL,
-                                        `author_phone` VARCHAR(40) NULL,
-                                        `message_html` LONGTEXT NOT NULL,
+                                    `sort_order`   INT NOT NULL DEFAULT 1,
+                                    `title`        TEXT NULL,
+                                    `content_html` LONGTEXT NULL,
+                                    `is_sample`    TINYINT(1) NOT NULL DEFAULT 0,
+
+                                    `created_at`   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                                    `updated_at`   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                                    `revoked_at`   DATETIME NULL,
+
+                                    CONSTRAINT `chk_card_notice_item_sort`
+                                        CHECK (`sort_order` >= 1),
+
+                                    PRIMARY KEY (`id`),
+                                    UNIQUE KEY `uq_card_notice_item_sort` (`group_id`, `sort_order`),
+                                    KEY `idx_card_notice_item_group_revoked` (`group_id`, `revoked_at`),
+                                    KEY `idx_card_notice_item_revoked_at` (`revoked_at`),
+
+                                    CONSTRAINT `fk_card_notice_item_group`
+                                        FOREIGN KEY (`group_id`) REFERENCES `card_notice_group` (`id`)
+                                            ON UPDATE RESTRICT ON DELETE RESTRICT
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+/* [Table 14] card_interview_item - Q&A 인터뷰 항목(정렬 가능한 리스트) */
+CREATE TABLE `card_interview_item` (
+                                       `id`          BINARY(16) NOT NULL,
+                                       `card_id`     BINARY(16) NOT NULL,
+
+                                       `sort_order`  INT NOT NULL DEFAULT 1,
+                                       `question`    TEXT NULL,
+                                       `answer`      TEXT NULL,
+
+                                       `created_at`  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                                       `updated_at`  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                                       `revoked_at`  DATETIME NULL,
+
+                                       CONSTRAINT `chk_card_interview_item_sort`
+                                           CHECK (`sort_order` >= 1),
+
+                                       PRIMARY KEY (`id`),
+                                       UNIQUE KEY `uq_card_interview_item_sort` (`card_id`, `sort_order`),
+                                       KEY `idx_card_interview_item_card_revoked` (`card_id`, `revoked_at`),
+                                       KEY `idx_card_interview_item_revoked_at` (`revoked_at`),
+
+                                       CONSTRAINT `fk_card_interview_item_card`
+                                           FOREIGN KEY (`card_id`) REFERENCES `card` (`id`)
+                                               ON UPDATE RESTRICT ON DELETE RESTRICT
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+
+/* =========================================================
+   PART 6) INTERACTION (대량/트래픽 많은 영역)
+   ========================================================= */
+
+/* [Table 15] card_guestbook_entry - 방명록 엔트리(대량/삭제/비공개 등) */
+CREATE TABLE `card_guestbook_entry` (
+                                        `id`                   BINARY(16) NOT NULL,
+                                        `card_id`              BINARY(16) NOT NULL,
+
+                                        `author_name`          VARCHAR(120) NOT NULL,
+                                        `author_phone`         VARCHAR(40) NULL,
+                                        `message_html`         LONGTEXT NOT NULL,
 
                                         `delete_password_hash` VARCHAR(255) NULL,
                                         `delete_password_salt` VARCHAR(255) NULL,
 
-                                        `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                                        `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-                                        `revoked_at` DATETIME NULL,
+                                        `created_at`           DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                                        `updated_at`           DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                                        `revoked_at`           DATETIME NULL,
 
                                         PRIMARY KEY (`id`),
                                         KEY `idx_card_guestbook_entry_card_created` (`card_id`, `created_at`),
@@ -804,33 +618,7 @@ CREATE TABLE `card_guestbook_entry` (
                                                 ON UPDATE RESTRICT ON DELETE RESTRICT
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-CREATE TABLE `card_rsvp_setting` (
-                                     `id`         BINARY(16) NOT NULL,
-                                     `card_id`    BINARY(16) NOT NULL,
-
-                                     `title`      TEXT NULL,
-                                     `content_html` LONGTEXT NULL,
-                                     `button_label` TEXT NULL,
-
-                                     `include_guest_count`   TINYINT(1) NOT NULL DEFAULT 1,
-                                     `include_phone`         TINYINT(1) NOT NULL DEFAULT 1,
-                                     `include_meal`          TINYINT(1) NOT NULL DEFAULT 1,
-                                     `include_extra_message` TINYINT(1) NOT NULL DEFAULT 1,
-                                     `include_bus`           TINYINT(1) NOT NULL DEFAULT 0,
-
-                                     `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                                     `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-                                     `revoked_at` DATETIME NULL,
-
-                                     PRIMARY KEY (`id`),
-                                     UNIQUE KEY `uq_card_rsvp_setting_card` (`card_id`),
-                                     KEY `idx_card_rsvp_setting_revoked_at` (`revoked_at`),
-
-                                     CONSTRAINT `fk_card_rsvp_setting_card`
-                                         FOREIGN KEY (`card_id`) REFERENCES `card` (`id`)
-                                             ON UPDATE RESTRICT ON DELETE RESTRICT
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
+/* [Table 16] card_rsvp_response - RSVP 응답(대량/통계/다운로드 가능성) */
 CREATE TABLE `card_rsvp_response` (
                                       `id`              BINARY(16) NOT NULL,
                                       `card_id`         BINARY(16) NOT NULL,
@@ -863,136 +651,27 @@ CREATE TABLE `card_rsvp_response` (
 
 
 /* =========================================================
-   10) INTERVIEW / NOTICE
+   PART 7) COMMERCE (WREATH & PAYMENT LOG)
    ========================================================= */
 
-CREATE TABLE `card_interview_setting` (
-                                          `id`         BINARY(16) NOT NULL,
-                                          `card_id`    BINARY(16) NOT NULL,
-
-                                          `title`      TEXT NULL,
-                                          `content_html` LONGTEXT NULL,
-                                          `groom_photo_media_id` BINARY(16) NULL,
-                                          `bride_photo_media_id` BINARY(16) NULL,
-
-                                          `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                                          `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-                                          `revoked_at` DATETIME NULL,
-
-                                          PRIMARY KEY (`id`),
-                                          UNIQUE KEY `uq_card_interview_setting_card` (`card_id`),
-                                          KEY `idx_card_interview_setting_revoked_at` (`revoked_at`),
-
-                                          CONSTRAINT `fk_card_interview_setting_card`
-                                              FOREIGN KEY (`card_id`) REFERENCES `card` (`id`)
-                                                  ON UPDATE RESTRICT ON DELETE RESTRICT,
-                                          CONSTRAINT `fk_card_interview_setting_groom_photo`
-                                              FOREIGN KEY (`groom_photo_media_id`) REFERENCES `media_asset` (`id`)
-                                                  ON UPDATE RESTRICT ON DELETE RESTRICT,
-                                          CONSTRAINT `fk_card_interview_setting_bride_photo`
-                                              FOREIGN KEY (`bride_photo_media_id`) REFERENCES `media_asset` (`id`)
-                                                  ON UPDATE RESTRICT ON DELETE RESTRICT
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
-CREATE TABLE `card_interview_item` (
-                                       `id`         BINARY(16) NOT NULL,
-                                       `card_id`    BINARY(16) NOT NULL,
-
-                                       `sort_order` INT NOT NULL DEFAULT 1,
-                                       `question`   TEXT NULL,
-                                       `answer`     TEXT NULL,
-
-                                       `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                                       `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-                                       `revoked_at` DATETIME NULL,
-
-                                       CONSTRAINT `chk_card_interview_item_sort`
-                                           CHECK (`sort_order` >= 1),
-
-                                       PRIMARY KEY (`id`),
-                                       UNIQUE KEY `uq_card_interview_item_sort` (`card_id`, `sort_order`),
-                                       KEY `idx_card_interview_item_card_revoked` (`card_id`, `revoked_at`),
-                                       KEY `idx_card_interview_item_revoked_at` (`revoked_at`),
-
-                                       CONSTRAINT `fk_card_interview_item_card`
-                                           FOREIGN KEY (`card_id`) REFERENCES `card` (`id`)
-                                               ON UPDATE RESTRICT ON DELETE RESTRICT
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
-CREATE TABLE `card_notice_group` (
-                                     `id`         BINARY(16) NOT NULL,
-                                     `card_id`    BINARY(16) NOT NULL,
-
-                                     `group_type` VARCHAR(16) NOT NULL DEFAULT 'grouped' COMMENT 'grouped/separate',
-                                     `sort_order` INT NOT NULL DEFAULT 1,
-                                     `title`      TEXT NULL,
-
-                                     `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                                     `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-                                     `revoked_at` DATETIME NULL,
-
-                                     CONSTRAINT `chk_card_notice_group_type`
-                                         CHECK (`group_type` IN ('grouped','separate')),
-                                     CONSTRAINT `chk_card_notice_group_sort`
-                                         CHECK (`sort_order` >= 1),
-
-                                     PRIMARY KEY (`id`),
-                                     UNIQUE KEY `uq_card_notice_group_sort` (`card_id`, `sort_order`),
-                                     KEY `idx_card_notice_group_card_revoked` (`card_id`, `revoked_at`),
-                                     KEY `idx_card_notice_group_revoked_at` (`revoked_at`),
-
-                                     CONSTRAINT `fk_card_notice_group_card`
-                                         FOREIGN KEY (`card_id`) REFERENCES `card` (`id`)
-                                             ON UPDATE RESTRICT ON DELETE RESTRICT
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
-CREATE TABLE `card_notice_item` (
-                                    `id`        BINARY(16) NOT NULL,
-                                    `group_id`  BINARY(16) NOT NULL,
-
-                                    `sort_order` INT NOT NULL DEFAULT 1,
-                                    `title`     TEXT NULL,
-                                    `content_html` LONGTEXT NULL,
-                                    `is_sample` TINYINT(1) NOT NULL DEFAULT 0,
-
-                                    `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                                    `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-                                    `revoked_at` DATETIME NULL,
-
-                                    CONSTRAINT `chk_card_notice_item_sort`
-                                        CHECK (`sort_order` >= 1),
-
-                                    PRIMARY KEY (`id`),
-                                    UNIQUE KEY `uq_card_notice_item_sort` (`group_id`, `sort_order`),
-                                    KEY `idx_card_notice_item_group_revoked` (`group_id`, `revoked_at`),
-                                    KEY `idx_card_notice_item_revoked_at` (`revoked_at`),
-
-                                    CONSTRAINT `fk_card_notice_item_group`
-                                        FOREIGN KEY (`group_id`) REFERENCES `card_notice_group` (`id`)
-                                            ON UPDATE RESTRICT ON DELETE RESTRICT
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
-
-/* =========================================================
-   11) WREATH (축하화환 보내기 / 목록) + CURRENCY
-   ========================================================= */
-
+/* [Table 17] wreath_item - 화환 상품 카탈로그(가격/통화/활성화) */
 CREATE TABLE `wreath_item` (
-                               `id`          BINARY(16) NOT NULL,
-                               `name`        VARCHAR(200) NOT NULL,
-                               `description` TEXT NULL,
-                               `image_media_id` BINARY(16) NULL,
+                               `id`              BINARY(16) NOT NULL,
+                               `name`            VARCHAR(200) NOT NULL,
+                               `description`     TEXT NULL,
+                               `image_media_id`  BINARY(16) NULL,
 
-                               `base_price`  DECIMAL(15,2) NOT NULL DEFAULT 0,
-                               `currency`    CHAR(3) NOT NULL DEFAULT 'VND' COMMENT 'KRW/USD/VND',
-                               `is_active`   TINYINT(1) NOT NULL DEFAULT 1,
+    /* Money: Minor unit (정수) */
+                               `base_price_minor` BIGINT NOT NULL DEFAULT 0,
+                               `currency`        CHAR(3) NOT NULL DEFAULT 'VND' COMMENT 'KRW/USD/VND',
+                               `is_active`       TINYINT(1) NOT NULL DEFAULT 1,
 
-                               `created_at`  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                               `updated_at`  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-                               `revoked_at`  DATETIME NULL,
+                               `created_at`      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                               `updated_at`      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                               `revoked_at`      DATETIME NULL,
 
-                               CONSTRAINT `chk_wreath_item_base_price`
-                                   CHECK (`base_price` >= 0),
+                               CONSTRAINT `chk_wreath_item_base_price_minor`
+                                   CHECK (`base_price_minor` >= 0),
                                CONSTRAINT `chk_wreath_item_currency`
                                    CHECK (`currency` IN ('KRW','USD','VND')),
 
@@ -1006,55 +685,34 @@ CREATE TABLE `wreath_item` (
                                        ON UPDATE RESTRICT ON DELETE RESTRICT
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-CREATE TABLE `card_wreath_setting` (
-                                       `id`          BINARY(16) NOT NULL,
-                                       `card_id`     BINARY(16) NOT NULL,
-
-                                       `is_enabled`  TINYINT(1) NOT NULL DEFAULT 0,
-                                       `display_mode` VARCHAR(16) NOT NULL DEFAULT 'floating_menu' COMMENT 'floating_menu/banner',
-                                       `show_wreath_list` TINYINT(1) NOT NULL DEFAULT 1,
-
-                                       `created_at`  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                                       `updated_at`  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-                                       `revoked_at`  DATETIME NULL,
-
-                                       CONSTRAINT `chk_card_wreath_display_mode`
-                                           CHECK (`display_mode` IN ('floating_menu','banner')),
-
-                                       PRIMARY KEY (`id`),
-                                       UNIQUE KEY `uq_card_wreath_setting_card` (`card_id`),
-                                       KEY `idx_card_wreath_setting_revoked_at` (`revoked_at`),
-
-                                       CONSTRAINT `fk_card_wreath_setting_card`
-                                           FOREIGN KEY (`card_id`) REFERENCES `card` (`id`)
-                                               ON UPDATE RESTRICT ON DELETE RESTRICT
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
+/* [Table 18] card_wreath_order - 카드별 화환 주문(결제 상태/표시 여부 포함) */
 CREATE TABLE `card_wreath_order` (
-                                     `id`            BINARY(16) NOT NULL,
-                                     `card_id`       BINARY(16) NOT NULL,
-                                     `wreath_item_id` BINARY(16) NULL,
+                                     `id`              BINARY(16) NOT NULL,
+                                     `card_id`         BINARY(16) NOT NULL,
+                                     `wreath_item_id`  BINARY(16) NULL,
 
-                                     `buyer_name`    VARCHAR(120) NOT NULL,
-                                     `buyer_phone`   VARCHAR(40) NULL,
-                                     `message`       TEXT NULL,
+                                     `buyer_name`      VARCHAR(120) NOT NULL,
+                                     `buyer_phone`     VARCHAR(40) NULL,
+                                     `message`         TEXT NULL,
                                      `display_on_card` TINYINT(1) NOT NULL DEFAULT 1,
 
-                                     `price_paid`    DECIMAL(15,2) NULL,
-                                     `currency`      CHAR(3) NOT NULL DEFAULT 'VND' COMMENT 'KRW/USD/VND',
-                                     `payment_status` VARCHAR(16) NOT NULL DEFAULT 'pending' COMMENT 'pending/paid/failed/refunded/cancelled',
-                                     `payment_ref`   VARCHAR(200) NULL,
+    /* Money: Minor unit (정수) */
+                                     `price_paid_minor` BIGINT NULL,
+                                     `currency`         CHAR(3) NOT NULL DEFAULT 'VND' COMMENT 'KRW/USD/VND',
 
-                                     `created_at`    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                                     `updated_at`    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-                                     `revoked_at`    DATETIME NULL,
+                                     `payment_status`   VARCHAR(16) NOT NULL DEFAULT 'pending' COMMENT 'pending/paid/failed/refunded/cancelled',
+                                     `payment_ref`      VARCHAR(200) NULL COMMENT 'PG사 Order/Payment ID',
+
+                                     `created_at`      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                                     `updated_at`      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                                     `revoked_at`      DATETIME NULL,
 
                                      CONSTRAINT `chk_card_wreath_order_currency`
                                          CHECK (`currency` IN ('KRW','USD','VND')),
                                      CONSTRAINT `chk_card_wreath_order_payment_status`
                                          CHECK (`payment_status` IN ('pending','paid','failed','refunded','cancelled')),
-                                     CONSTRAINT `chk_card_wreath_order_price_paid`
-                                         CHECK (`price_paid` IS NULL OR `price_paid` >= 0),
+                                     CONSTRAINT `chk_card_wreath_order_price_paid_minor`
+                                         CHECK (`price_paid_minor` IS NULL OR `price_paid_minor` >= 0),
 
                                      PRIMARY KEY (`id`),
                                      KEY `idx_card_wreath_order_card_created` (`card_id`, `created_at`),
@@ -1070,50 +728,48 @@ CREATE TABLE `card_wreath_order` (
                                              ON UPDATE RESTRICT ON DELETE RESTRICT
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+/* [Table 19] payment_event_log - 결제 이벤트 로그(시도/성공/실패/웹훅/환불 등 디버깅/감사 목적) */
+CREATE TABLE `payment_event_log` (
+                                     `id`          BINARY(16) NOT NULL,
+                                     `order_id`    BINARY(16) NOT NULL,
 
-/* =========================================================
-   12) SNAP (Google Drive)
-   ========================================================= */
+                                     `event_type`  VARCHAR(32) NOT NULL COMMENT 'attempt/success/fail/webhook/refund/cancel',
+                                     `provider`    VARCHAR(32) NULL COMMENT 'PG사/결제수단 식별자',
+                                     `raw_payload` LONGTEXT NULL CHECK (JSON_VALID(`raw_payload`)) COMMENT 'PG 응답 원문(JSON)',
 
-CREATE TABLE `card_snap_setting` (
-                                     `id`            BINARY(16) NOT NULL,
-                                     `card_id`       BINARY(16) NOT NULL,
-
-                                     `is_enabled`    TINYINT(1) NOT NULL DEFAULT 0,
-                                     `drive_folder_id`   VARCHAR(200) NULL,
-                                     `drive_folder_name` VARCHAR(200) NULL,
-                                     `title`         TEXT NULL,
-                                     `description`   TEXT NULL,
-
-                                     `created_at`    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                                     `updated_at`    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-                                     `revoked_at`    DATETIME NULL,
+                                     `created_at`  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
                                      PRIMARY KEY (`id`),
-                                     UNIQUE KEY `uq_card_snap_setting_card` (`card_id`),
-                                     KEY `idx_card_snap_setting_revoked_at` (`revoked_at`),
+                                     KEY `idx_payment_event_log_order` (`order_id`),
+                                     KEY `idx_payment_event_log_created_at` (`created_at`),
 
-                                     CONSTRAINT `fk_card_snap_setting_card`
-                                         FOREIGN KEY (`card_id`) REFERENCES `card` (`id`)
+                                     CONSTRAINT `fk_payment_event_log_order`
+                                         FOREIGN KEY (`order_id`) REFERENCES `card_wreath_order` (`id`)
                                              ON UPDATE RESTRICT ON DELETE RESTRICT
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-CREATE TABLE `card_snap_upload` (
-                                    `id`            BINARY(16) NOT NULL,
-                                    `card_id`       BINARY(16) NOT NULL,
 
-                                    `uploader_name` VARCHAR(120) NULL,
-                                    `uploader_phone` VARCHAR(40) NULL,
+/* =========================================================
+   PART 8) SNAP (Google Drive Upload List)
+   ========================================================= */
+
+/* [Table 20] card_snap_upload - Snap 업로드 기록(대량/추적/삭제) */
+CREATE TABLE `card_snap_upload` (
+                                    `id`               BINARY(16) NOT NULL,
+                                    `card_id`          BINARY(16) NOT NULL,
+
+                                    `uploader_name`    VARCHAR(120) NULL,
+                                    `uploader_phone`   VARCHAR(40) NULL,
 
                                     `provider_file_id` VARCHAR(200) NULL COMMENT 'Google Drive fileId',
                                     `provider_web_url` TEXT NULL,
-                                    `file_name`     VARCHAR(255) NULL,
-                                    `mime_type`     VARCHAR(128) NULL,
-                                    `bytes`         BIGINT NULL,
+                                    `file_name`        VARCHAR(255) NULL,
+                                    `mime_type`        VARCHAR(128) NULL,
+                                    `bytes`            BIGINT NULL,
 
-                                    `created_at`    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                                    `updated_at`    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-                                    `revoked_at`    DATETIME NULL,
+                                    `created_at`       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                                    `updated_at`       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                                    `revoked_at`       DATETIME NULL,
 
                                     PRIMARY KEY (`id`),
                                     KEY `idx_card_snap_upload_card_created` (`card_id`, `created_at`),
